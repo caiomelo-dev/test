@@ -134,6 +134,21 @@ export function expandSearchTerms(q: string): string[] {
 
 // Verifica se um nome de time corresponde a algum termo expandido da query
 export function matchesQuery(teamName: string, q: string): boolean {
+  return matchScore(teamName, q) > 0;
+}
+
+// Pontua a relevância de um nome de time pra uma busca — 0 = não bate.
+// Usado pra ranquear resultados em vez de devolver na ordem que a ESPN
+// mandou (que não tem nenhuma relação com o que o usuário digitou).
+export function matchScore(teamName: string, q: string): number {
   const name = norm(teamName);
-  return expandSearchTerms(q).some((term) => term.length > 0 && name.includes(term));
+  const terms = expandSearchTerms(q).filter((t) => t.length > 0);
+  let best = 0;
+  for (const term of terms) {
+    if (name === term) best = Math.max(best, 100);
+    else if (name.startsWith(term)) best = Math.max(best, 80);
+    else if (new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(name)) best = Math.max(best, 60);
+    else if (name.includes(term)) best = Math.max(best, 40);
+  }
+  return best;
 }

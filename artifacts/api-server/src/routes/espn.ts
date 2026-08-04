@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { logger } from "../lib/logger";
-import { matchesQuery } from "../lib/translations";
+import { matchScore } from "../lib/translations";
 
 const router = Router();
 
@@ -29,6 +29,17 @@ const ESPN_LEAGUES: Record<number, string> = {
   5: "uefa.champions_qual",
   6: "uefa.europa_qual",
   7: "uefa.europa.conf_qual",
+  // Ligas adicionadas a pedido do usuário — mesmos ids de constants.ts no
+  // client. bra.copa_do_brasil não está confirmado contra a API real da
+  // ESPN (sandbox sem acesso a site.api.espn.com).
+  200: "ned.1",
+  201: "por.1",
+  202: "tur.1",
+  203: "arg.1",
+  204: "bra.copa_do_brasil",
+  205: "chi.1",
+  206: "uru.1",
+  207: "col.1",
 };
 
 interface EspnTeamRaw {
@@ -124,11 +135,22 @@ async function espnFetch<T>(url: string, timeoutMs = 8000): Promise<T> {
   }
 }
 
-function extractTeams(data: EspnTeamsResponse, slug: string, q: string) {
+interface ScoredTeam { id: string; name: string; logo: string; slug: string; score: number }
+
+function extractTeams(data: EspnTeamsResponse, slug: string, q: string): ScoredTeam[] {
   return (data.sports?.[0]?.leagues?.[0]?.teams ?? [])
-    .map(t => ({ id: t.team.id, name: t.team.displayName, logo: t.team.logos?.[0]?.href ?? "", slug }))
-    .filter(t => matchesQuery(t.name, q));
+    .map(t => ({
+      id: t.team.id, name: t.team.displayName, logo: t.team.logos?.[0]?.href ?? "", slug,
+      score: matchScore(t.team.displayName, q),
+    }))
+    .filter(t => t.score > 0);
 }
+
+// Abaixo desse número de resultados relevantes na liga escolhida, também
+// buscamos nas demais ligas configuradas — cobre tanto "zero resultados"
+// quanto "o time certo está em outra liga, mas apareceu algo parecido na
+// escolhida" (que antes fazia a busca nunca olhar pras outras ligas).
+const MIN_GOOD_RESULTS = 5;
 
 router.get("/espn/search", async (req, res) => {
   const { q, leagueId } = req.query as { q: string; leagueId: string };
@@ -140,18 +162,28 @@ router.get("/espn/search", async (req, res) => {
     const data = await espnFetch<EspnTeamsResponse>(`${ESPN_BASE}/${slug}/teams`);
     const teams = extractTeams(data, slug, q);
 
-    if (teams.length === 0) {
-      const slugsToTry = [...new Set(Object.values(ESPN_LEAGUES))].filter(s => s !== slug);
-      for (const s of slugsToTry.slice(0, 6)) {
-        try {
-          const d2 = await espnFetch<EspnTeamsResponse>(`${ESPN_BASE}/${s}/teams`);
-          const found = extractTeams(d2, s, q);
-          if (found.length) { teams.push(...found); break; }
-        } catch (_) {}
+    if (teams.length < MIN_GOOD_RESULTS) {
+      // Busca em TODAS as demais ligas configuradas, em paralelo (antes:
+      // só se a liga escolhida desse zero resultado, e só nas primeiras 6,
+      // em sequência — o que deixava o time de fora se ele jogasse numa
+      // liga que não estivesse nesses 6 primeiros slugs).
+      const otherSlugs = [...new Set(Object.values(ESPN_LEAGUES))].filter(s => s !== slug);
+      const results = await Promise.allSettled(
+        otherSlugs.map(s =>
+          espnFetch<EspnTeamsResponse>(`${ESPN_BASE}/${s}/teams`).then(d => extractTeams(d, s, q))
+        )
+      );
+      const seen = new Set(teams.map(t => t.id));
+      for (const r of results) {
+        if (r.status !== "fulfilled") continue;
+        for (const t of r.value) {
+          if (!seen.has(t.id)) { seen.add(t.id); teams.push(t); }
+        }
       }
     }
 
-    res.json({ teams: teams.slice(0, 10) });
+    teams.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+    res.json({ teams: teams.slice(0, 10).map(({ score: _score, ...t }) => t) });
   } catch (err) {
     logger.error({ err }, "ESPN search error");
     res.status(500).json({ error: "ESPN search failed" });
@@ -190,6 +222,14 @@ const COMP_NAMES: Record<string, string> = {
   "uefa.europa.conf_qual": "Conference League (Qualificação)",
   "conmebol.libertadores": "Libertadores",
   "conmebol.sudamericana": "Sul-Americana",
+  "ned.1": "Eredivisie",
+  "por.1": "Liga Portugal",
+  "tur.1": "Süper Lig",
+  "arg.1": "Liga Argentina",
+  "bra.copa_do_brasil": "Copa do Brasil",
+  "chi.1": "Liga Chilena",
+  "uru.1": "Liga Uruguaia",
+  "col.1": "Liga Colombiana",
   // Ajuste 10: "all" busca todas as competições numa chamada só (ver
   // collectClubGames) — não dá pra saber o nome exato da competição de
   // cada jogo individual sem uma chamada extra, então deixamos em branco
@@ -274,15 +314,19 @@ async function collectClubGames(teamId: string, slug: string): Promise<{ tagged:
     }
   }
 
-  // Fallback: se "all" não trouxe nada pra esse time (raro), cai pro caminho
-  // antigo por liga específica — melhor um dado incompleto do que nenhum.
-  // Não faz sentido tentar isso para slugs UEFA (ESPN não guarda schedule
-  // de clube nesses slugs — só na liga doméstica, que aqui já não sabemos).
-  if (!events.length && !UEFA_SLUGS.has(slug)) {
+  // Sempre mescla o calendário da liga especificamente escolhida pelo
+  // usuário, mesmo que "all" já tenha trazido jogos — não dá pra confirmar
+  // contra a API real (sandbox sem acesso a ela) que "all" é de fato
+  // abrangente. Sem isso, um time que jogou Brasileirão + Copa do Brasil
+  // podia ficar sem uma das duas competições na amostra dos "últimos 10
+  // jogos", dependendo de qual delas "all" decidisse devolver. Não faz
+  // sentido tentar isso para slugs UEFA (ESPN não guarda schedule de clube
+  // nesses slugs — só na liga doméstica, que aqui já não sabemos).
+  if (!UEFA_SLUGS.has(slug)) {
     try {
       addEvents(await espnFetch<EspnScheduleResponse>(`${ESPN_BASE}/${slug}/teams/${teamId}/schedule`));
     } catch (_) {}
-    if (events.length < 5) {
+    if (events.length < 10) {
       for (const yr of [currentYear, currentYear - 1, currentYear - 2]) {
         if (events.length >= 10) break;
         try {
