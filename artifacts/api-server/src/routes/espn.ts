@@ -301,7 +301,7 @@ async function collectClubGames(teamId: string, slug: string): Promise<{ tagged:
 }
 
 router.get("/espn/team-games", async (req, res) => {
-  const { teamId, slug } = req.query as { teamId: string; slug: string; season: string };
+  const { teamId, slug } = req.query as { teamId: string; slug: string };
   if (!teamId || !slug) { res.status(400).json({ error: "teamId and slug required" }); return; }
 
   const isNational = slug === "fifa.world";

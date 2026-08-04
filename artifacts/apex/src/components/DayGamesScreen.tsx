@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { C, LEAGUES, ESPN_LEAGUE_MAP, currentSeasonYear } from "../lib/constants";
+import { C, LEAGUES, ESPN_LEAGUE_MAP } from "../lib/constants";
 import {
   consolidate, scoreMarkets, runMGAAPlus, goalProbabilities,
   buildRecommendations, buildDayMultipla, dataConfidence, marketStatus,
@@ -289,10 +289,9 @@ export function DayGamesScreen({ onBack, onToast }: DayGamesScreenProps) {
         const g = allGames[i];
         setProgress({ current: i + 1, total: allGames.length, label: `${g.homeTeamName} vs ${g.awayTeamName}` });
         try {
-          const season = currentSeasonYear(g.slug);
           const [homeData, awayData] = await Promise.allSettled([
-            espnLoadTeamGames(g.homeTeamId, g.slug, season),
-            espnLoadTeamGames(g.awayTeamId, g.slug, season),
+            espnLoadTeamGames(g.homeTeamId, g.slug),
+            espnLoadTeamGames(g.awayTeamId, g.slug),
           ]);
           const homeGames = homeData.status === "fulfilled" ? homeData.value.games : [];
           const awayGames = awayData.status === "fulfilled" ? awayData.value.games : [];
@@ -322,10 +321,9 @@ export function DayGamesScreen({ onBack, onToast }: DayGamesScreenProps) {
       setProgress({ current: i + 1, total: allGames.length, label: `${g.homeTeamName} vs ${g.awayTeamName}` });
 
       try {
-        const season = currentSeasonYear(g.slug);
         const [homeData, awayData] = await Promise.allSettled([
-          espnLoadTeamGames(g.homeTeamId, g.slug, season),
-          espnLoadTeamGames(g.awayTeamId, g.slug, season),
+          espnLoadTeamGames(g.homeTeamId, g.slug),
+          espnLoadTeamGames(g.awayTeamId, g.slug),
         ]);
 
         const homeGames = homeData.status === "fulfilled" ? homeData.value.games : [];

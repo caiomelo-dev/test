@@ -371,8 +371,7 @@ export function ApexPage() {
     setLoading(true); setLoadMsg(`Carregando jogos de ${team.name}...`);
     setSearchRes([]);
     try {
-      const season = currentSeasonYear(team.slug);
-      const data = await espnLoadTeamGames(team.id, team.slug, season);
+      const data = await espnLoadTeamGames(team.id, team.slug);
       const t: Team = {
         name: data.teamName || team.name, position: "", teamId: parseInt(team.id), logo: data.logo || team.logo,
         motivation: { title: false, relegation: false, continental: false, knockout: false, classic: false, mustwin: false },

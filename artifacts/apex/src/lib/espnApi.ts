@@ -1,5 +1,5 @@
 import type { Game, H2HGame, DayGame } from "../types";
-import { ESPN_LEAGUE_MAP, currentSeasonYear } from "./constants";
+import { ESPN_LEAGUE_MAP } from "./constants";
 
 export interface EspnTeam {
   id: string;
@@ -38,10 +38,6 @@ export function getEspnSlug(leagueId: number): string {
   return ESPN_LEAGUE_MAP[leagueId] ?? "bra.1";
 }
 
-export function getEspnSeason(slug: string): number {
-  return currentSeasonYear(slug);
-}
-
 export async function espnSearchTeams(q: string, leagueId: number): Promise<EspnTeam[]> {
   const res = await fetch(`/api/espn/search?q=${encodeURIComponent(q)}&leagueId=${leagueId}`);
   if (!res.ok) throw new Error(`Erro ${res.status}`);
@@ -51,11 +47,10 @@ export async function espnSearchTeams(q: string, leagueId: number): Promise<Espn
 
 export async function espnLoadTeamGames(
   teamId: string,
-  slug: string,
-  season: number
+  slug: string
 ): Promise<EspnTeamGamesResult> {
   const res = await fetch(
-    `/api/espn/team-games?teamId=${teamId}&slug=${encodeURIComponent(slug)}&season=${season}`
+    `/api/espn/team-games?teamId=${teamId}&slug=${encodeURIComponent(slug)}`
   );
   if (!res.ok) throw new Error(`Erro ${res.status}`);
   return res.json();
