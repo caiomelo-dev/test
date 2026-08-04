@@ -582,8 +582,14 @@ export function ApexPage() {
     return <DayGamesScreen onBack={() => setDayOpen(false)} onToast={showToast} />;
   }
 
-  // ── AUDITORIA DE DADOS (Ajuste 12 — substitui a auditoria antiga de acerto,
-  // que não faz mais sentido já que o sistema não analisa mais partidas) ──
+  // ── AUDITORIA DE DADOS (Ajuste 12) ──
+  // Duas trilhas de auditoria coexistem, com propósitos diferentes:
+  // 1) esta tela (AuditDataScreen / /api/audit-data): revisão manual de
+  //    dados brutos exportados via "exportRawData" — sem cálculo envolvido.
+  // 2) logToAudit() abaixo, chamada ao final de analyze(): registra as
+  //    probabilidades calibradas do modelo (/api/audit/log-client) para medir
+  //    a taxa de acerto/Brier score do método — a análise completa (Poisson,
+  //    MGAA+) continua ativa e é o que alimenta essa segunda trilha.
   if (auditOpen) {
     return <AuditDataScreen onBack={() => setAuditOpen(false)} onToast={showToast} />;
   }
