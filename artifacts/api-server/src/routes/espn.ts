@@ -158,12 +158,17 @@ router.get("/espn/search", async (req, res) => {
   }
 });
 
-// Slugs to try for national teams, newest seasons first
-const NATIONAL_TEAM_SOURCES: { slug: string; seasons: number[] }[] = [
-  { slug: "fifa.world",    seasons: [2026] },
-  { slug: "fifa.friendly", seasons: [2025, 2024, 2023] },
-  { slug: "uefa.nations",  seasons: [2025, 2024, 2023] },
-];
+// Slugs to try for national teams
+const NATIONAL_TEAM_SLUGS = ["fifa.world", "fifa.friendly", "uefa.nations"];
+
+// Ajuste 11 (espelhado aqui do lado do cliente): temporadas calculadas
+// dinamicamente em vez de anos hardcoded. O array fixo antigo (ex.: só até
+// 2025 pra amistoso/Liga das Nações) ficava defasado assim que o ano virava
+// — os jogos mais recentes de seleções simplesmente paravam de aparecer.
+function recentSeasons(count = 3): number[] {
+  const now = new Date().getFullYear();
+  return Array.from({ length: count }, (_, i) => now - i);
+}
 
 const COMP_NAMES: Record<string, string> = {
   "fifa.world": "Copa do Mundo",
@@ -200,8 +205,10 @@ async function collectNationalGames(teamId: string): Promise<{ tagged: TaggedEve
   const tagged: TaggedEvent[] = [];
   let teamMeta: EspnScheduleResponse["team"] = undefined;
 
+  const seasons = recentSeasons();
+
   await Promise.allSettled(
-    NATIONAL_TEAM_SOURCES.flatMap(({ slug: s, seasons }) =>
+    NATIONAL_TEAM_SLUGS.flatMap((s) =>
       seasons.map(async (season) => {
         const data = await espnFetch<EspnScheduleResponse>(
           `${ESPN_BASE}/${s}/teams/${teamId}/schedule?season=${season}`
