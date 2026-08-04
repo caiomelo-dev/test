@@ -1,11 +1,13 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // APEX — Auditoria de Apostas (Bet Tracker)
 // ═══════════════════════════════════════════════════════════════════════════
+//
+// Persistido no Postgres (via @workspace/db) em vez de um arquivo JSON local:
+// num deploy autoscale o filesystem não é garantidamente persistente entre
+// reinícios/instâncias, então dados gravados em disco podiam sumir.
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
-import { join } from "path";
-
-const DB_PATH = join(process.cwd(), "data", "audit-log.json");
+import { and, eq } from "drizzle-orm";
+import { db, auditPredictionsTable, type AuditPrediction } from "@workspace/db";
 
 const TRACKED_MARKETS = [
   "homeWin", "draw", "awayWin",
@@ -36,30 +38,26 @@ interface AuditEntry {
   settledAt?: string;
 }
 
-interface AuditDB {
-  entries: AuditEntry[];
+function rowToEntry(row: AuditPrediction): AuditEntry {
+  return {
+    id: row.id,
+    createdAt: row.createdAt.toISOString(),
+    homeTeam: row.homeTeam,
+    awayTeam: row.awayTeam,
+    league: row.league,
+    matchDate: row.matchDate,
+    predictions: row.predictions as Record<TrackedMarket, number | null>,
+    ...(row.predictedExactScore != null ? { predictedExactScore: row.predictedExactScore } : {}),
+    actualResult: row.actualResult as AuditEntry["actualResult"],
+    status: row.status as AuditEntry["status"],
+    ...(row.settledAt ? { settledAt: row.settledAt.toISOString() } : {}),
+  };
 }
 
-function ensureDB(): void {
-  const dir = join(process.cwd(), "data");
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  if (!existsSync(DB_PATH)) writeFileSync(DB_PATH, JSON.stringify({ entries: [] }, null, 2));
-}
-
-function readDB(): AuditDB {
-  ensureDB();
-  return JSON.parse(readFileSync(DB_PATH, "utf-8")) as AuditDB;
-}
-
-function writeDB(db: AuditDB): void {
-  writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
-}
-
-export function logPredictionFromMap(
+export async function logPredictionFromMap(
   matchInfo: { homeTeam: string; awayTeam: string; league: string; date: string; exactScore?: string },
   predictionsIn: Partial<Record<TrackedMarket, number | null>>
-): string {
-  const db = readDB();
+): Promise<string> {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   const predictions: Record<TrackedMarket, number | null> = {} as Record<TrackedMarket, number | null>;
@@ -69,28 +67,26 @@ export function logPredictionFromMap(
       typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : null;
   });
 
-  db.entries.push({
+  await db.insert(auditPredictionsTable).values({
     id,
-    createdAt: new Date().toISOString(),
     homeTeam: matchInfo.homeTeam,
     awayTeam: matchInfo.awayTeam,
     league: matchInfo.league ?? "",
     matchDate: matchInfo.date ?? "",
     predictions,
-    predictedExactScore: matchInfo.exactScore,
+    predictedExactScore: matchInfo.exactScore ?? null,
     actualResult: null,
     status: "pending",
   });
 
-  writeDB(db);
   return id;
 }
 
-// ─── Build outcomes and settle an entry ────────────────────────────────────
+// ─── Build outcomes for a settled entry ────────────────────────────────────
 
 function buildSettledResult(
-  entry: AuditEntry,
-  actual: { homeGoals: number; awayGoals: number; actualCards?: number; actualCorners?: number }
+  actual: { homeGoals: number; awayGoals: number; actualCards?: number; actualCorners?: number },
+  predictedExactScore: string | null
 ): AuditEntry["actualResult"] {
   const { homeGoals, awayGoals, actualCards, actualCorners } = actual;
   const total = homeGoals + awayGoals;
@@ -108,7 +104,7 @@ function buildSettledResult(
   };
 
   const actualScoreStr = `${homeGoals}-${awayGoals}`;
-  const exactScoreHit = !!entry.predictedExactScore && entry.predictedExactScore === actualScoreStr;
+  const exactScoreHit = !!predictedExactScore && predictedExactScore === actualScoreStr;
 
   return {
     homeGoals,
@@ -120,67 +116,68 @@ function buildSettledResult(
   };
 }
 
-export function registerResult(
+export async function registerResult(
   id: string,
   actual: { homeGoals: number; awayGoals: number; actualCards?: number; actualCorners?: number }
-): AuditEntry {
-  const db = readDB();
-  const entry = db.entries.find((e) => e.id === id);
-  if (!entry) throw new Error(`Entrada ${id} não encontrada`);
-  if (entry.status === "settled") {
+): Promise<AuditEntry> {
+  const [row] = await db.select().from(auditPredictionsTable).where(eq(auditPredictionsTable.id, id));
+  if (!row) throw new Error(`Entrada ${id} não encontrada`);
+  if (row.status === "settled") {
     throw new Error(`Resultado já registrado para ${id} — use a edição para corrigir`);
   }
 
-  entry.actualResult = buildSettledResult(entry, actual);
-  entry.status = "settled";
-  entry.settledAt = new Date().toISOString();
+  const actualResult = buildSettledResult(actual, row.predictedExactScore);
+  const [updated] = await db
+    .update(auditPredictionsTable)
+    .set({ actualResult, status: "settled", settledAt: new Date() })
+    .where(eq(auditPredictionsTable.id, id))
+    .returning();
 
-  writeDB(db);
-  return entry;
+  return rowToEntry(updated!);
 }
 
-export function updateSettledEntry(
+export async function updateSettledEntry(
   id: string,
   actual: { homeGoals: number; awayGoals: number; actualCards?: number; actualCorners?: number }
-): AuditEntry {
-  const db = readDB();
-  const entry = db.entries.find((e) => e.id === id);
-  if (!entry) throw new Error(`Entrada ${id} não encontrada`);
-  if (entry.status !== "settled") {
+): Promise<AuditEntry> {
+  const [row] = await db.select().from(auditPredictionsTable).where(eq(auditPredictionsTable.id, id));
+  if (!row) throw new Error(`Entrada ${id} não encontrada`);
+  if (row.status !== "settled") {
     throw new Error(`Só entradas encerradas podem ser editadas — use /audit/result para pendentes`);
   }
 
-  entry.actualResult = buildSettledResult(entry, actual);
-  entry.settledAt = new Date().toISOString();
+  const actualResult = buildSettledResult(actual, row.predictedExactScore);
+  const [updated] = await db
+    .update(auditPredictionsTable)
+    .set({ actualResult, settledAt: new Date() })
+    .where(eq(auditPredictionsTable.id, id))
+    .returning();
 
-  writeDB(db);
-  return entry;
+  return rowToEntry(updated!);
 }
 
-export function deleteAuditEntry(id: string): boolean {
-  const db = readDB();
-  const idx = db.entries.findIndex((e) => e.id === id && e.status === "pending");
-  if (idx === -1) return false;
-  db.entries.splice(idx, 1);
-  writeDB(db);
-  return true;
+export async function deleteAuditEntry(id: string): Promise<boolean> {
+  const deleted = await db
+    .delete(auditPredictionsTable)
+    .where(and(eq(auditPredictionsTable.id, id), eq(auditPredictionsTable.status, "pending")))
+    .returning({ id: auditPredictionsTable.id });
+  return deleted.length > 0;
 }
 
-export function deleteSettledEntry(id: string): boolean {
-  const db = readDB();
-  const idx = db.entries.findIndex((e) => e.id === id && e.status === "settled");
-  if (idx === -1) return false;
-  db.entries.splice(idx, 1);
-  writeDB(db);
-  return true;
+export async function deleteSettledEntry(id: string): Promise<boolean> {
+  const deleted = await db
+    .delete(auditPredictionsTable)
+    .where(and(eq(auditPredictionsTable.id, id), eq(auditPredictionsTable.status, "settled")))
+    .returning({ id: auditPredictionsTable.id });
+  return deleted.length > 0;
 }
 
-export function deleteAllSettledEntries(): number {
-  const db = readDB();
-  const before = db.entries.length;
-  db.entries = db.entries.filter((e) => e.status !== "settled");
-  writeDB(db);
-  return before - db.entries.length;
+export async function deleteAllSettledEntries(): Promise<number> {
+  const deleted = await db
+    .delete(auditPredictionsTable)
+    .where(eq(auditPredictionsTable.status, "settled"))
+    .returning({ id: auditPredictionsTable.id });
+  return deleted.length;
 }
 
 export interface ExactScoreAccuracy {
@@ -208,9 +205,10 @@ export interface AccuracyReport {
   avisoMetodologico: string | null;
 }
 
-export function calculateAccuracy(threshold = 60): AccuracyReport {
-  const db = readDB();
-  const settled = db.entries.filter((e) => e.status === "settled");
+export async function calculateAccuracy(threshold = 60): Promise<AccuracyReport> {
+  const rows = await db.select().from(auditPredictionsTable);
+  const entries = rows.map(rowToEntry);
+  const settled = entries.filter((e) => e.status === "settled");
 
   const porMercado = {} as AccuracyReport["porMercado"];
   TRACKED_MARKETS.forEach((market) => {
@@ -250,9 +248,9 @@ export function calculateAccuracy(threshold = 60): AccuracyReport {
   const acertosExatos = comPlacar.filter((e) => e.actualResult?.exactScoreHit).length;
 
   return {
-    totalJogosNoBanco: db.entries.length,
+    totalJogosNoBanco: entries.length,
     totalJogosComResultado: settled.length,
-    totalJogosPendentes: db.entries.length - settled.length,
+    totalJogosPendentes: entries.length - settled.length,
     thresholdUsado: `${threshold}%`,
     porMercado,
     placareExato: {
@@ -269,12 +267,14 @@ export function calculateAccuracy(threshold = 60): AccuracyReport {
   };
 }
 
-export function getPendingEntries() {
-  return readDB().entries.filter((e) => e.status === "pending");
+export async function getPendingEntries(): Promise<AuditEntry[]> {
+  const rows = await db.select().from(auditPredictionsTable).where(eq(auditPredictionsTable.status, "pending"));
+  return rows.map(rowToEntry);
 }
 
-export function getAllEntries() {
-  return readDB().entries;
+export async function getAllEntries(): Promise<AuditEntry[]> {
+  const rows = await db.select().from(auditPredictionsTable);
+  return rows.map(rowToEntry);
 }
 
 export { TRACKED_MARKETS };

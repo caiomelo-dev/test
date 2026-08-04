@@ -79,21 +79,36 @@ router.get("/sources-status", async (_req, res) => {
 
 // ─── audit routes ─────────────────────────────────────────────────────────────
 
-router.get("/audit/pending", (_req, res) => {
-  res.json(getPendingEntries());
+router.get("/audit/pending", async (_req, res) => {
+  try {
+    res.json(await getPendingEntries());
+  } catch (err) {
+    logger.error({ err }, "/audit/pending error");
+    res.status(500).json({ error: (err as Error).message });
+  }
 });
 
-router.get("/audit/all", (_req, res) => {
-  res.json(getAllEntries());
+router.get("/audit/all", async (_req, res) => {
+  try {
+    res.json(await getAllEntries());
+  } catch (err) {
+    logger.error({ err }, "/audit/all error");
+    res.status(500).json({ error: (err as Error).message });
+  }
 });
 
-router.get("/audit/accuracy", (req, res) => {
+router.get("/audit/accuracy", async (req, res) => {
   const threshold = parseFloat(String(req.query["threshold"])) || 60;
-  res.json(calculateAccuracy(threshold));
+  try {
+    res.json(await calculateAccuracy(threshold));
+  } catch (err) {
+    logger.error({ err }, "/audit/accuracy error");
+    res.status(500).json({ error: (err as Error).message });
+  }
 });
 
 // Register result for a PENDING entry (first time)
-router.post("/audit/result/:trackingId", (req, res) => {
+router.post("/audit/result/:trackingId", async (req, res) => {
   const { homeGoals, awayGoals, actualCards, actualCorners } = req.body as {
     homeGoals: number;
     awayGoals: number;
@@ -105,7 +120,7 @@ router.post("/audit/result/:trackingId", (req, res) => {
     return;
   }
   try {
-    const entry = registerResult(req.params["trackingId"]!, {
+    const entry = await registerResult(req.params["trackingId"]!, {
       homeGoals, awayGoals,
       ...(actualCards !== undefined ? { actualCards } : {}),
       ...(actualCorners !== undefined ? { actualCorners } : {}),
@@ -117,7 +132,7 @@ router.post("/audit/result/:trackingId", (req, res) => {
 });
 
 // Edit a SETTLED entry (re-register with corrected data)
-router.put("/audit/entries/:id", (req, res) => {
+router.put("/audit/entries/:id", async (req, res) => {
   const { homeGoals, awayGoals, actualCards, actualCorners } = req.body as {
     homeGoals: number;
     awayGoals: number;
@@ -129,7 +144,7 @@ router.put("/audit/entries/:id", (req, res) => {
     return;
   }
   try {
-    const entry = updateSettledEntry(req.params["id"]!, {
+    const entry = await updateSettledEntry(req.params["id"]!, {
       homeGoals, awayGoals,
       ...(actualCards !== undefined ? { actualCards } : {}),
       ...(actualCorners !== undefined ? { actualCorners } : {}),
@@ -150,29 +165,34 @@ interface LogClientBody {
   predictions: Record<string, number | null>;
 }
 
-router.post("/audit/log-client", (req, res) => {
+router.post("/audit/log-client", async (req, res) => {
   const { homeTeam, awayTeam, league, date, exactScore, predictions } = req.body as LogClientBody;
   if (!homeTeam || !awayTeam || !predictions || typeof predictions !== "object") {
     res.status(400).json({ error: "homeTeam, awayTeam e predictions são obrigatórios" });
     return;
   }
-  const trackingId = logPredictionFromMap(
-    {
-      homeTeam,
-      awayTeam,
-      league: league ?? "",
-      date: date ?? new Date().toISOString().split("T")[0]!,
-      exactScore,
-    },
-    predictions
-  );
-  res.json({ trackingId });
+  try {
+    const trackingId = await logPredictionFromMap(
+      {
+        homeTeam,
+        awayTeam,
+        league: league ?? "",
+        date: date ?? new Date().toISOString().split("T")[0]!,
+        exactScore,
+      },
+      predictions
+    );
+    res.json({ trackingId });
+  } catch (err) {
+    logger.error({ err }, "/audit/log-client error");
+    res.status(500).json({ error: (err as Error).message });
+  }
 });
 
 // Delete a PENDING entry
-router.delete("/audit/entries/:id", (req, res) => {
+router.delete("/audit/entries/:id", async (req, res) => {
   const { id } = req.params;
-  const deleted = deleteAuditEntry(id!);
+  const deleted = await deleteAuditEntry(id!);
   if (!deleted) {
     res.status(404).json({ error: "Entrada não encontrada ou já encerrada — só pendentes podem ser removidas aqui" });
     return;
@@ -181,9 +201,9 @@ router.delete("/audit/entries/:id", (req, res) => {
 });
 
 // Delete a single SETTLED entry
-router.delete("/audit/settled/:id", (req, res) => {
+router.delete("/audit/settled/:id", async (req, res) => {
   const { id } = req.params;
-  const deleted = deleteSettledEntry(id!);
+  const deleted = await deleteSettledEntry(id!);
   if (!deleted) {
     res.status(404).json({ error: "Entrada encerrada não encontrada" });
     return;
@@ -192,8 +212,8 @@ router.delete("/audit/settled/:id", (req, res) => {
 });
 
 // Delete ALL settled entries
-router.delete("/audit/settled", (_req, res) => {
-  const count = deleteAllSettledEntries();
+router.delete("/audit/settled", async (_req, res) => {
+  const count = await deleteAllSettledEntries();
   res.json({ ok: true, deleted: count });
 });
 

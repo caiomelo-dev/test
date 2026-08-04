@@ -1,122 +1,134 @@
 import { Router } from "express";
-import fs from "fs";
-import path from "path";
+import { desc, eq } from "drizzle-orm";
+import { db, matchReviewEntriesTable, type MatchReviewEntry } from "@workspace/db";
 import { logger } from "../lib/logger";
 
 const router = Router();
 
-// Ajuste 12: armazenamento em arquivo JSON — sobrevive a restart do
-// servidor, diferente do bet-tracker antigo (em memória). Sem precisar
-// configurar banco (o Drizzle/Postgres do projeto está configurado mas
-// nunca foi usado — isso resolve a persistência sem essa complexidade).
-const DATA_DIR = path.join(process.cwd(), "data");
-const DATA_FILE = path.join(DATA_DIR, "audit-entries.json");
+// Persistido no Postgres (via @workspace/db) em vez de um arquivo JSON local
+// em disco — num deploy autoscale o filesystem não é garantidamente
+// persistente entre reinícios/instâncias, então essa revisão manual de
+// partidas podia sumir mesmo estando "salva".
 
-interface AuditEntry {
-  id: string;
-  createdAt: string;
-  homeTeam: string;
-  awayTeam: string;
-  league: string;
-  date: string;
-  rawData: string;
-  status: "pendente" | "concluida";
-  realScore?: string;
-  notes?: string;
-  concludedAt?: string;
-}
-
-function loadEntries(): AuditEntry[] {
-  try {
-    if (!fs.existsSync(DATA_FILE)) return [];
-    const raw = fs.readFileSync(DATA_FILE, "utf-8");
-    return JSON.parse(raw) as AuditEntry[];
-  } catch (err) {
-    logger.error({ err }, "Falha ao ler audit-entries.json");
-    return [];
-  }
-}
-
-function saveEntries(entries: AuditEntry[]): void {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(DATA_FILE, JSON.stringify(entries, null, 2), "utf-8");
+// Mantém o contrato de API existente (campo "date", timestamps como string)
+// mesmo com o schema do banco usando "matchDate"/Date.
+function toApiEntry(row: MatchReviewEntry) {
+  const { matchDate, createdAt, concludedAt, realScore, notes, ...rest } = row;
+  return {
+    ...rest,
+    date: matchDate,
+    createdAt: createdAt.toISOString(),
+    ...(concludedAt ? { concludedAt: concludedAt.toISOString() } : {}),
+    ...(realScore != null ? { realScore } : {}),
+    ...(notes != null ? { notes } : {}),
+  };
 }
 
 // Lista todas as entradas (pendentes + concluídas)
-router.get("/audit-data", (_req, res) => {
-  res.json({ entries: loadEntries() });
+router.get("/audit-data", async (_req, res) => {
+  try {
+    const entries = await db
+      .select()
+      .from(matchReviewEntriesTable)
+      .orderBy(desc(matchReviewEntriesTable.createdAt));
+    res.json({ entries: entries.map(toApiEntry) });
+  } catch (err) {
+    logger.error({ err }, "Falha ao ler audit-data");
+    res.status(500).json({ error: "Falha ao ler dados de auditoria" });
+  }
 });
 
 // Salva um jogo buscado (a partir do modo "apenas os dados")
-router.post("/audit-data", (req, res) => {
+router.post("/audit-data", async (req, res) => {
   const { homeTeam, awayTeam, league, date, rawData } = req.body ?? {};
   if (!homeTeam || !awayTeam || !rawData) {
     res.status(400).json({ error: "homeTeam, awayTeam e rawData são obrigatórios" });
     return;
   }
-  const entries = loadEntries();
-  const entry: AuditEntry = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    createdAt: new Date().toISOString(),
-    homeTeam: String(homeTeam),
-    awayTeam: String(awayTeam),
-    league: String(league ?? ""),
-    date: String(date ?? ""),
-    rawData: String(rawData),
-    status: "pendente",
-  };
-  entries.unshift(entry);
-  saveEntries(entries);
-  res.json({ entry });
+  try {
+    const [entry] = await db
+      .insert(matchReviewEntriesTable)
+      .values({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        homeTeam: String(homeTeam),
+        awayTeam: String(awayTeam),
+        league: String(league ?? ""),
+        matchDate: String(date ?? ""),
+        rawData: String(rawData),
+        status: "pendente",
+      })
+      .returning();
+    res.json({ entry: toApiEntry(entry!) });
+  } catch (err) {
+    logger.error({ err }, "Falha ao salvar audit-data");
+    res.status(500).json({ error: "Falha ao salvar dados de auditoria" });
+  }
 });
 
 // Marca uma entrada como concluída, com o placar/resultado real informado
 // manualmente pelo usuário (decisão de produto: sem busca automática de
 // resultado — o usuário confirma o que realmente aconteceu).
-router.patch("/audit-data/:id", (req, res) => {
+router.patch("/audit-data/:id", async (req, res) => {
   const { id } = req.params;
   const { realScore, notes } = req.body ?? {};
-  const entries = loadEntries();
-  const idx = entries.findIndex(e => e.id === id);
-  if (idx === -1) {
-    res.status(404).json({ error: "Entrada não encontrada" });
-    return;
+  try {
+    const [entry] = await db
+      .update(matchReviewEntriesTable)
+      .set({
+        status: "concluida",
+        ...(realScore != null ? { realScore: String(realScore) } : {}),
+        ...(notes != null ? { notes: String(notes) } : {}),
+        concludedAt: new Date(),
+      })
+      .where(eq(matchReviewEntriesTable.id, id!))
+      .returning();
+    if (!entry) {
+      res.status(404).json({ error: "Entrada não encontrada" });
+      return;
+    }
+    res.json({ entry: toApiEntry(entry) });
+  } catch (err) {
+    logger.error({ err }, "Falha ao concluir audit-data");
+    res.status(500).json({ error: "Falha ao concluir entrada" });
   }
-  entries[idx] = {
-    ...entries[idx],
-    status: "concluida",
-    realScore: realScore != null ? String(realScore) : entries[idx].realScore,
-    notes: notes != null ? String(notes) : entries[idx].notes,
-    concludedAt: new Date().toISOString(),
-  };
-  saveEntries(entries);
-  res.json({ entry: entries[idx] });
 });
 
 // Reabre uma entrada concluída por engano
-router.patch("/audit-data/:id/reabrir", (req, res) => {
+router.patch("/audit-data/:id/reabrir", async (req, res) => {
   const { id } = req.params;
-  const entries = loadEntries();
-  const idx = entries.findIndex(e => e.id === id);
-  if (idx === -1) {
-    res.status(404).json({ error: "Entrada não encontrada" });
-    return;
+  try {
+    const [entry] = await db
+      .update(matchReviewEntriesTable)
+      .set({ status: "pendente" })
+      .where(eq(matchReviewEntriesTable.id, id!))
+      .returning();
+    if (!entry) {
+      res.status(404).json({ error: "Entrada não encontrada" });
+      return;
+    }
+    res.json({ entry: toApiEntry(entry) });
+  } catch (err) {
+    logger.error({ err }, "Falha ao reabrir audit-data");
+    res.status(500).json({ error: "Falha ao reabrir entrada" });
   }
-  entries[idx].status = "pendente";
-  saveEntries(entries);
-  res.json({ entry: entries[idx] });
 });
 
-router.delete("/audit-data/:id", (req, res) => {
+router.delete("/audit-data/:id", async (req, res) => {
   const { id } = req.params;
-  const before = loadEntries();
-  const entries = before.filter(e => e.id !== id);
-  if (entries.length === before.length) {
-    res.status(404).json({ error: "Entrada não encontrada" });
-    return;
+  try {
+    const deleted = await db
+      .delete(matchReviewEntriesTable)
+      .where(eq(matchReviewEntriesTable.id, id!))
+      .returning({ id: matchReviewEntriesTable.id });
+    if (!deleted.length) {
+      res.status(404).json({ error: "Entrada não encontrada" });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, "Falha ao apagar audit-data");
+    res.status(500).json({ error: "Falha ao apagar entrada" });
   }
-  saveEntries(entries);
-  res.json({ ok: true });
 });
 
 export default router;
