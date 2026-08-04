@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { C, LEAGUES, MOTIVATION_FACTORS, ESPN_LEAGUE_MAP, currentSeasonYear } from "../lib/constants";
+import { C, LEAGUES, MOTIVATION_FACTORS, ESPN_LEAGUE_MAP, currentSeasonYear, groupLeaguesByRegion } from "../lib/constants";
 import { consolidate, scoreMarkets, marketStatus, dataConfidence, buildRecommendations, goalProbabilities, exactScoreProbabilities, runMGAAPlus, type ScoreOpts, type MatchOddsInput, type MGAAResult } from "../lib/math";
 import { espnSearchTeams, espnLoadTeamGames, espnLoadH2H, espnLoadReferees, getEspnSlug, type EspnReferee } from "../lib/espnApi";
 import { formatMatchupRawData } from "../lib/rawDataExport";
@@ -649,13 +649,18 @@ export function ApexPage() {
       <div style={{ background: "rgba(0,229,255,.06)", border: `1px solid ${C.cyan}22`, borderRadius: 10, padding: "10px 14px", fontSize: 11, color: C.cyan, marginBottom: 16, lineHeight: 1.5 }}>
         ✓ Dados automáticos via ESPN · H2H automático · Modelo Poisson avançado
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-        {LEAGUES.map(l => (
-          <button key={l.id} onClick={() => setLeague(l)} style={{ background: league?.id === l.id ? `${C.cyan}18` : "rgba(255,255,255,.03)", border: `1px solid ${league?.id === l.id ? C.cyan : C.border}`, borderRadius: 10, padding: "11px 12px", cursor: "pointer", color: league?.id === l.id ? C.cyan : "#B0C4DE", fontSize: 12, fontWeight: league?.id === l.id ? 700 : 400, display: "flex", alignItems: "center", gap: 8, textAlign: "left" }}>
-            <span>{l.country}</span><span>{l.name}</span>
-          </button>
-        ))}
-      </div>
+      {groupLeaguesByRegion(LEAGUES).map(({ region, leagues }) => (
+        <div key={region} style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 10, color: C.muted, letterSpacing: 1.5, fontWeight: 700, textTransform: "uppercase", marginBottom: 8 }}>{region}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            {leagues.map(l => (
+              <button key={l.id} onClick={() => setLeague(l)} style={{ background: league?.id === l.id ? `${C.cyan}18` : "rgba(255,255,255,.03)", border: `1px solid ${league?.id === l.id ? C.cyan : C.border}`, borderRadius: 10, padding: "11px 12px", cursor: "pointer", color: league?.id === l.id ? C.cyan : "#B0C4DE", fontSize: 12, fontWeight: league?.id === l.id ? 700 : 400, display: "flex", alignItems: "center", gap: 8, textAlign: "left" }}>
+                <span>{l.country}</span><span>{l.name}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
       {league && (
         <div style={{ marginTop: 16 }}>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, textAlign: "center" }}>

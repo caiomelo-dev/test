@@ -1,8 +1,11 @@
+export type LeagueRegion = "Seleções" | "Europa" | "América do Sul" | "América do Norte";
+
 export interface League {
   id: number;
   name: string;
   country: string;
   isNationalTeam: boolean;
+  region: LeagueRegion;
 }
 
 export interface MotivationFactors {

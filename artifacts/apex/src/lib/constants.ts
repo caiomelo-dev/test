@@ -1,4 +1,4 @@
-import type { League } from "../types";
+import type { League, LeagueRegion } from "../types";
 
 export const C = {
   bg: "#080D1A",
@@ -36,6 +36,18 @@ export const ESPN_LEAGUE_MAP: Record<number, string> = {
   5: "uefa.champions_qual",
   6: "uefa.europa_qual",
   7: "uefa.europa.conf_qual",
+  // Ligas adicionadas a pedido do usuário. Os slugs seguem o padrão
+  // "país.1" já usado acima; bra.copa_do_brasil é o único não confirmado
+  // contra a API real da ESPN (sandbox sem acesso a site.api.espn.com) —
+  // ver curl de verificação combinado com o usuário.
+  200: "ned.1",
+  201: "por.1",
+  202: "tur.1",
+  203: "arg.1",
+  204: "bra.copa_do_brasil",
+  205: "chi.1",
+  206: "uru.1",
+  207: "col.1",
 };
 
 // Ajuste 11: temporada calculada dinamicamente em vez de mapa fixo com ano
@@ -45,6 +57,7 @@ export const ESPN_LEAGUE_MAP: Record<number, string> = {
 // (Brasileirão, MLS, Sul-Americana, Libertadores) usam o ano corrente.
 const EUROPEAN_SEASON_SLUGS = new Set([
   "eng.1", "esp.1", "ita.1", "ger.1", "fra.1",
+  "ned.1", "por.1", "tur.1",
   "uefa.champions", "uefa.europa", "uefa.europa.conf",
   "uefa.champions_qual", "uefa.europa_qual", "uefa.europa.conf_qual",
 ]);
@@ -61,27 +74,43 @@ export function currentSeasonYear(slug: string): number {
 }
 
 export const LEAGUES: League[] = [
-  { id: 1,   name: "Copa do Mundo",       country: "🌍", isNationalTeam: true  },
-  { id: 39,  name: "Premier League",      country: "🏴󠁧󠁢󠁥󠁮󠁧󠁿", isNationalTeam: false },
-  { id: 140, name: "La Liga",             country: "🇪🇸", isNationalTeam: false },
-  { id: 135, name: "Serie A",             country: "🇮🇹", isNationalTeam: false },
-  { id: 78,  name: "Bundesliga",          country: "🇩🇪", isNationalTeam: false },
-  { id: 61,  name: "Ligue 1",             country: "🇫🇷", isNationalTeam: false },
-  { id: 71,  name: "Brasileirão Série A", country: "🇧🇷", isNationalTeam: false },
-  { id: 72,  name: "Brasileirão Série B", country: "🇧🇷", isNationalTeam: false },
-  { id: 2,   name: "Champions League",    country: "🇪🇺", isNationalTeam: false },
-  { id: 3,   name: "Europa League",       country: "🇪🇺", isNationalTeam: false },
-  { id: 4,   name: "Conference League",   country: "🇪🇺", isNationalTeam: false },
-  { id: 11,  name: "Sul-Americana",       country: "🌎", isNationalTeam: false },
-  { id: 13,  name: "Libertadores",        country: "🌎", isNationalTeam: false },
-  { id: 253, name: "MLS",                 country: "🇺🇸", isNationalTeam: false },
+  { id: 1,   name: "Copa do Mundo",       country: "🌍", isNationalTeam: true,  region: "Seleções" },
+  { id: 39,  name: "Premier League",      country: "🏴󠁧󠁢󠁥󠁮󠁧󠁿", isNationalTeam: false, region: "Europa" },
+  { id: 140, name: "La Liga",             country: "🇪🇸", isNationalTeam: false, region: "Europa" },
+  { id: 135, name: "Serie A",             country: "🇮🇹", isNationalTeam: false, region: "Europa" },
+  { id: 78,  name: "Bundesliga",          country: "🇩🇪", isNationalTeam: false, region: "Europa" },
+  { id: 61,  name: "Ligue 1",             country: "🇫🇷", isNationalTeam: false, region: "Europa" },
+  { id: 200, name: "Eredivisie",          country: "🇳🇱", isNationalTeam: false, region: "Europa" },
+  { id: 201, name: "Liga Portugal",       country: "🇵🇹", isNationalTeam: false, region: "Europa" },
+  { id: 202, name: "Süper Lig",           country: "🇹🇷", isNationalTeam: false, region: "Europa" },
+  { id: 2,   name: "Champions League",    country: "🇪🇺", isNationalTeam: false, region: "Europa" },
+  { id: 3,   name: "Europa League",       country: "🇪🇺", isNationalTeam: false, region: "Europa" },
+  { id: 4,   name: "Conference League",   country: "🇪🇺", isNationalTeam: false, region: "Europa" },
   // Ajuste 9: qualificatórias — relevantes agora (jul/ago). Somem sozinhas
   // dos resultados quando a fase principal começar (scoreboard retorna
   // vazio nesse slug quando não há mais jogos de qualificação).
-  { id: 5,   name: "Champions League — Qualificação",  country: "🇪🇺", isNationalTeam: false },
-  { id: 6,   name: "Europa League — Qualificação",     country: "🇪🇺", isNationalTeam: false },
-  { id: 7,   name: "Conference League — Qualificação", country: "🇪🇺", isNationalTeam: false },
+  { id: 5,   name: "Champions League — Qualificação",  country: "🇪🇺", isNationalTeam: false, region: "Europa" },
+  { id: 6,   name: "Europa League — Qualificação",     country: "🇪🇺", isNationalTeam: false, region: "Europa" },
+  { id: 7,   name: "Conference League — Qualificação", country: "🇪🇺", isNationalTeam: false, region: "Europa" },
+  { id: 71,  name: "Brasileirão Série A", country: "🇧🇷", isNationalTeam: false, region: "América do Sul" },
+  { id: 72,  name: "Brasileirão Série B", country: "🇧🇷", isNationalTeam: false, region: "América do Sul" },
+  { id: 204, name: "Copa do Brasil",      country: "🇧🇷", isNationalTeam: false, region: "América do Sul" },
+  { id: 203, name: "Liga Argentina",      country: "🇦🇷", isNationalTeam: false, region: "América do Sul" },
+  { id: 205, name: "Liga Chilena",        country: "🇨🇱", isNationalTeam: false, region: "América do Sul" },
+  { id: 206, name: "Liga Uruguaia",       country: "🇺🇾", isNationalTeam: false, region: "América do Sul" },
+  { id: 207, name: "Liga Colombiana",     country: "🇨🇴", isNationalTeam: false, region: "América do Sul" },
+  { id: 11,  name: "Sul-Americana",       country: "🌎", isNationalTeam: false, region: "América do Sul" },
+  { id: 13,  name: "Libertadores",        country: "🌎", isNationalTeam: false, region: "América do Sul" },
+  { id: 253, name: "MLS",                 country: "🇺🇸", isNationalTeam: false, region: "América do Norte" },
 ];
+
+const LEAGUE_REGION_ORDER: LeagueRegion[] = ["Seleções", "Europa", "América do Sul", "América do Norte"];
+
+export function groupLeaguesByRegion(leagues: League[]): { region: LeagueRegion; leagues: League[] }[] {
+  return LEAGUE_REGION_ORDER
+    .map(region => ({ region, leagues: leagues.filter(l => l.region === region) }))
+    .filter(g => g.leagues.length > 0);
+}
 
 export const MOTIVATION_FACTORS = [
   { key: "title", label: "Título", icon: "🏆" },
