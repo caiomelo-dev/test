@@ -40,7 +40,15 @@ const ESPN_LEAGUES: Record<number, string> = {
   205: "chi.1",
   206: "uru.1",
   207: "col.1",
+  // 999 (FREE_SEARCH_LEAGUE_ID) fica de fora de propósito — ver abaixo.
 };
+
+// Amistosos, finais avulsas entre campeões de competições diferentes etc.
+// Mesmo id de FREE_SEARCH_LEAGUE_ID em constants.ts no client — não tem
+// slug ESPN fixo, então não entra em ESPN_LEAGUES. Ao receber esse id,
+// /espn/search pula a tentativa "liga escolhida primeiro" e já procura em
+// todas as ligas configuradas.
+const FREE_SEARCH_LEAGUE_ID = 999;
 
 interface EspnTeamRaw {
   id: string;
@@ -152,33 +160,52 @@ function extractTeams(data: EspnTeamsResponse, slug: string, q: string): ScoredT
 // escolhida" (que antes fazia a busca nunca olhar pras outras ligas).
 const MIN_GOOD_RESULTS = 5;
 
+// Busca em todas as ligas configuradas (menos as já buscadas), em paralelo,
+// mesclando por id (dedupe) — usado tanto pro fallback de resultado fraco
+// quanto pra busca livre (amistoso/jogo único, sem liga âncora).
+async function searchOtherLeagues(q: string, skip: Set<string>): Promise<ScoredTeam[]> {
+  const slugsToTry = [...new Set(Object.values(ESPN_LEAGUES))].filter(s => !skip.has(s));
+  const results = await Promise.allSettled(
+    slugsToTry.map(s =>
+      espnFetch<EspnTeamsResponse>(`${ESPN_BASE}/${s}/teams`).then(d => extractTeams(d, s, q))
+    )
+  );
+  const found: ScoredTeam[] = [];
+  const seen = new Set<string>();
+  for (const r of results) {
+    if (r.status !== "fulfilled") continue;
+    for (const t of r.value) {
+      if (!seen.has(t.id)) { seen.add(t.id); found.push(t); }
+    }
+  }
+  return found;
+}
+
 router.get("/espn/search", async (req, res) => {
   const { q, leagueId } = req.query as { q: string; leagueId: string };
   if (!q) { res.status(400).json({ error: "q required" }); return; }
 
-  const slug = ESPN_LEAGUES[parseInt(leagueId)] ?? "bra.1";
+  const parsedLeagueId = parseInt(leagueId);
 
   try {
-    const data = await espnFetch<EspnTeamsResponse>(`${ESPN_BASE}/${slug}/teams`);
-    const teams = extractTeams(data, slug, q);
+    let teams: ScoredTeam[];
 
-    if (teams.length < MIN_GOOD_RESULTS) {
-      // Busca em TODAS as demais ligas configuradas, em paralelo (antes:
-      // só se a liga escolhida desse zero resultado, e só nas primeiras 6,
-      // em sequência — o que deixava o time de fora se ele jogasse numa
-      // liga que não estivesse nesses 6 primeiros slugs).
-      const otherSlugs = [...new Set(Object.values(ESPN_LEAGUES))].filter(s => s !== slug);
-      const results = await Promise.allSettled(
-        otherSlugs.map(s =>
-          espnFetch<EspnTeamsResponse>(`${ESPN_BASE}/${s}/teams`).then(d => extractTeams(d, s, q))
-        )
-      );
-      const seen = new Set(teams.map(t => t.id));
-      for (const r of results) {
-        if (r.status !== "fulfilled") continue;
-        for (const t of r.value) {
-          if (!seen.has(t.id)) { seen.add(t.id); teams.push(t); }
-        }
+    if (parsedLeagueId === FREE_SEARCH_LEAGUE_ID) {
+      // Amistoso/jogo único: não tem liga âncora, procura em tudo direto.
+      teams = await searchOtherLeagues(q, new Set());
+    } else {
+      const slug = ESPN_LEAGUES[parsedLeagueId] ?? "bra.1";
+      const data = await espnFetch<EspnTeamsResponse>(`${ESPN_BASE}/${slug}/teams`);
+      teams = extractTeams(data, slug, q);
+
+      if (teams.length < MIN_GOOD_RESULTS) {
+        // Busca em TODAS as demais ligas configuradas, em paralelo (antes:
+        // só se a liga escolhida desse zero resultado, e só nas primeiras 6,
+        // em sequência — o que deixava o time de fora se ele jogasse numa
+        // liga que não estivesse nesses 6 primeiros slugs).
+        const seen = new Set(teams.map(t => t.id));
+        const more = await searchOtherLeagues(q, new Set([slug]));
+        for (const t of more) if (!seen.has(t.id)) teams.push(t);
       }
     }
 

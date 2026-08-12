@@ -507,7 +507,7 @@ export function ApexPage() {
   // Mercados de escanteios/cartões/tempo: scores 0-10 convertidos para % (informativos).
   function logToAudit(gp: ReturnType<typeof goalProbabilities>, mkts: MarketScores) {
     if (!league || !homeTeam.name || !awayTeam.name) return;
-    const leagueSlug = ESPN_LEAGUE_MAP[league.id] ?? "bra.1";
+    const leagueSlug = league.isFreeSearch ? "amistoso" : (ESPN_LEAGUE_MAP[league.id] ?? "bra.1");
     const pct = (p: number) => Math.round(Math.max(0, Math.min(1, p)) * 100);
     // Score 0-10 → % (informativo, não-calibrado)
     const s2p = (s: number) => Math.round(Math.max(0, Math.min(10, s)) * 10);
@@ -663,9 +663,15 @@ export function ApexPage() {
       ))}
       {league && (
         <div style={{ marginTop: 16 }}>
-          <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, textAlign: "center" }}>
-            Temporada: <span style={{ color: C.cyan, fontWeight: 700 }}>{currentSeasonYear(ESPN_LEAGUE_MAP[league.id] ?? "bra.1")}</span>
-          </div>
+          {league.isFreeSearch ? (
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, textAlign: "center" }}>
+              Busca o time em todas as ligas cadastradas — sem liga fixa.
+            </div>
+          ) : (
+            <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, textAlign: "center" }}>
+              Temporada: <span style={{ color: C.cyan, fontWeight: 700 }}>{currentSeasonYear(ESPN_LEAGUE_MAP[league.id] ?? "bra.1")}</span>
+            </div>
+          )}
           <Btn full onClick={() => { setPage("home"); setActiveGame(0); }}>Continuar →</Btn>
         </div>
       )}

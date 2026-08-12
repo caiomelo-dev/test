@@ -48,7 +48,15 @@ export const ESPN_LEAGUE_MAP: Record<number, string> = {
   205: "chi.1",
   206: "uru.1",
   207: "col.1",
+  // 999 (FREE_SEARCH_LEAGUE_ID) fica de fora de propósito — não tem slug
+  // fixo, a busca de time cobre todas as ligas acima direto.
 };
+
+// Amistosos internacionais, finais avulsas entre campeões de competições
+// diferentes etc. — não têm uma liga/slug ESPN fixo pra chamar. Ao escolher
+// essa opção, a busca de time ignora a liga e procura em todas as ligas
+// configuradas desde o início (ver /api/espn/search no backend).
+export const FREE_SEARCH_LEAGUE_ID = 999;
 
 // Ajuste 11: temporada calculada dinamicamente em vez de mapa fixo com ano
 // hardcoded. Isso resolve de vez a pergunta "precisa atualizar algo quando
@@ -102,9 +110,12 @@ export const LEAGUES: League[] = [
   { id: 11,  name: "Sul-Americana",       country: "🌎", isNationalTeam: false, region: "América do Sul" },
   { id: 13,  name: "Libertadores",        country: "🌎", isNationalTeam: false, region: "América do Sul" },
   { id: 253, name: "MLS",                 country: "🇺🇸", isNationalTeam: false, region: "América do Norte" },
+  // Amistosos, finais avulsas entre campeões de competições diferentes etc.
+  // — o time pode ser de qualquer uma das ligas acima; ver FREE_SEARCH_LEAGUE_ID.
+  { id: FREE_SEARCH_LEAGUE_ID, name: "Amistoso / Jogo Único", country: "🎖️", isNationalTeam: false, region: "Especial", isFreeSearch: true },
 ];
 
-const LEAGUE_REGION_ORDER: LeagueRegion[] = ["Seleções", "Europa", "América do Sul", "América do Norte"];
+const LEAGUE_REGION_ORDER: LeagueRegion[] = ["Seleções", "Europa", "América do Sul", "América do Norte", "Especial"];
 
 export function groupLeaguesByRegion(leagues: League[]): { region: LeagueRegion; leagues: League[] }[] {
   return LEAGUE_REGION_ORDER

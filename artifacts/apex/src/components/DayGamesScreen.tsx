@@ -20,8 +20,10 @@ function todayInputVal(): string {
 
 // "Jogos do Dia" varre calendário de clubes — seleções (Copa do Mundo) ficam
 // de fora dessa tela porque o calendário delas é esparso demais pra fazer
-// sentido junto de uma varredura diária por liga.
-const CLUB_LEAGUES = LEAGUES.filter(l => !l.isNationalTeam);
+// sentido junto de uma varredura diária por liga. "Amistoso / Jogo Único"
+// também fica de fora — não tem slug ESPN fixo pra consultar um scoreboard
+// por data (ver FREE_SEARCH_LEAGUE_ID em constants.ts).
+const CLUB_LEAGUES = LEAGUES.filter(l => !l.isNationalTeam && !l.isFreeSearch);
 
 // ── Main component ────────────────────────────────────────────────────────────
 

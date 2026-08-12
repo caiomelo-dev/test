@@ -1,4 +1,4 @@
-export type LeagueRegion = "Seleções" | "Europa" | "América do Sul" | "América do Norte";
+export type LeagueRegion = "Seleções" | "Europa" | "América do Sul" | "América do Norte" | "Especial";
 
 export interface League {
   id: number;
@@ -6,6 +6,12 @@ export interface League {
   country: string;
   isNationalTeam: boolean;
   region: LeagueRegion;
+  // Amistosos e finais avulsas entre campeões de competições diferentes —
+  // não têm uma liga/slug ESPN fixo. A busca de time ignora a liga
+  // escolhida e procura em todas as ligas configuradas desde o início; a
+  // tela de "Jogos do Dia" (que varre um scoreboard por liga+data) exclui
+  // essas entradas, já que não existe um slug pra consultar.
+  isFreeSearch?: boolean;
 }
 
 export interface MotivationFactors {
