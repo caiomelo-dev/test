@@ -262,6 +262,7 @@ export function ApexPage() {
   const [referee, setReferee] = useState<RefereeData>(emptyRef());
   const [referees, setReferees] = useState<EspnReferee[]>([]);
   const [odds, setOdds] = useState<OddsForm>(emptyOdds());
+  const [matchContext, setMatchContext] = useState("");
   const [activeGame, setActiveGame] = useState(0);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [mgaaResult, setMgaaResult] = useState<MGAAResult | null>(null);
@@ -349,7 +350,7 @@ export function ApexPage() {
     setPage("league"); setLeague(null);
     setHomeTeam(emptyTeam()); setAwayTeam(emptyTeam());
     setH2h(emptyH2H()); setReferee(emptyRef());
-    setOdds(emptyOdds()); setResult(null); setMgaaResult(null);
+    setOdds(emptyOdds()); setMatchContext(""); setResult(null); setMgaaResult(null);
     setActiveGame(0); setSearchQ(""); setSearchRes([]);
     setReferees([]); setEditIdx(null);
     setDataExport(null); setCopied(false);
@@ -442,7 +443,7 @@ export function ApexPage() {
   // Sistema não realiza mais análise — só busca e devolve os dados brutos
   // dos últimos jogos dos dois times.
   function exportRawData() {
-    const text = formatMatchupRawData(homeTeam.name, awayTeam.name, homeTeam.games, awayTeam.games);
+    const text = formatMatchupRawData(homeTeam.name, awayTeam.name, homeTeam.games, awayTeam.games, matchContext);
     setDataExport(text);
     setCopied(false);
     setPage("data");
@@ -842,6 +843,25 @@ export function ApexPage() {
           <Field label="BTTS Sim" value={odds.btts} onChange={v => setOdds(p => ({ ...p, btts: v }))} placeholder="1.80" />
           <Field label="BTTS Não" value={odds.bttsNo} onChange={v => setOdds(p => ({ ...p, bttsNo: v }))} placeholder="2.00" />
         </div>
+      </Card>
+      <Card style={{ marginBottom: 12 }}>
+        <SLabel icon="🏆">Contexto do Confronto (opcional)</SLabel>
+        <div style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>
+          Mata-mata (ida/volta, placar agregado, regra de gol fora), decisão,
+          rebaixamento, ou qualquer outro contexto que não apareça nos dados
+          brutos — vai junto no texto exportado, pra IA de análise levar em conta.
+        </div>
+        <textarea
+          value={matchContext}
+          onChange={e => setMatchContext(e.target.value)}
+          placeholder="Ex.: Mata-mata, volta. Jogo de ida: Time A 2-1 Time B. Sem gol fora em dobro — precisa vencer por 2+ de diferença."
+          rows={3}
+          style={{
+            width: "100%", background: "rgba(255,255,255,.03)", border: `1px solid ${C.border}`,
+            borderRadius: 8, padding: "9px 12px", color: C.text, fontSize: 13, outline: "none",
+            resize: "vertical", fontFamily: "inherit",
+          }}
+        />
       </Card>
       <div style={{ display: "flex", gap: 10 }}>
         <Btn variant="ghost" onClick={() => { setPage("away"); setActiveGame(9); }}>← Voltar</Btn>

@@ -22,7 +22,7 @@ export function GameList({
   if (!filled.length) {
     return (
       <div style={{ textAlign: "center", color: C.muted, padding: 24, fontSize: 13 }}>
-        Busque e carregue um time para ver os 10 jogos
+        Busque e carregue um time para ver os jogos
       </div>
     );
   }

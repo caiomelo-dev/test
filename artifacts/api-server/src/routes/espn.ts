@@ -217,6 +217,15 @@ router.get("/espn/search", async (req, res) => {
   }
 });
 
+// Janela dupla de amostra: os SHORT_TERM_WINDOW jogos mais recentes recebem
+// busca completa de estatísticas (/summary — chutes, escanteios, cartões,
+// faixas de gol); do SHORT_TERM_WINDOW+1 até TOTAL_GAMES_WINDOW, só
+// resultado/placar/adversário (já vem de graça na listagem de calendário,
+// sem chamada extra por jogo) — dá pra IA externa uma base estrutural maior
+// sem multiplicar o número de chamadas caras à ESPN.
+const SHORT_TERM_WINDOW = 10;
+const TOTAL_GAMES_WINDOW = 30;
+
 // Slugs to try for national teams
 const NATIONAL_TEAM_SLUGS = ["fifa.world", "fifa.friendly", "uefa.nations"];
 
@@ -331,10 +340,10 @@ async function collectClubGames(teamId: string, slug: string): Promise<{ tagged:
     addEvents(await espnFetch<EspnScheduleResponse>(`${ESPN_BASE}/all/teams/${teamId}/schedule`));
   } catch (_) {}
 
-  // Tentativa 2: cascateia por ano, ainda em "all", até ter pelo menos 10 jogos
-  if (events.length < 10) {
+  // Tentativa 2: cascateia por ano, ainda em "all", até ter a janela toda
+  if (events.length < TOTAL_GAMES_WINDOW) {
     for (const yr of [currentYear, currentYear - 1, currentYear - 2]) {
-      if (events.length >= 10) break;
+      if (events.length >= TOTAL_GAMES_WINDOW) break;
       try {
         addEvents(await espnFetch<EspnScheduleResponse>(`${ESPN_BASE}/all/teams/${teamId}/schedule?season=${yr}`));
       } catch (_) {}
@@ -345,7 +354,7 @@ async function collectClubGames(teamId: string, slug: string): Promise<{ tagged:
   // usuário, mesmo que "all" já tenha trazido jogos — não dá pra confirmar
   // contra a API real (sandbox sem acesso a ela) que "all" é de fato
   // abrangente. Sem isso, um time que jogou Brasileirão + Copa do Brasil
-  // podia ficar sem uma das duas competições na amostra dos "últimos 10
+  // podia ficar sem uma das duas competições na amostra dos "últimos
   // jogos", dependendo de qual delas "all" decidisse devolver. Não faz
   // sentido tentar isso para slugs UEFA (ESPN não guarda schedule de clube
   // nesses slugs — só na liga doméstica, que aqui já não sabemos).
@@ -353,9 +362,9 @@ async function collectClubGames(teamId: string, slug: string): Promise<{ tagged:
     try {
       addEvents(await espnFetch<EspnScheduleResponse>(`${ESPN_BASE}/${slug}/teams/${teamId}/schedule`));
     } catch (_) {}
-    if (events.length < 10) {
+    if (events.length < TOTAL_GAMES_WINDOW) {
       for (const yr of [currentYear, currentYear - 1, currentYear - 2]) {
-        if (events.length >= 10) break;
+        if (events.length >= TOTAL_GAMES_WINDOW) break;
         try {
           addEvents(await espnFetch<EspnScheduleResponse>(`${ESPN_BASE}/${slug}/teams/${teamId}/schedule?season=${yr}`));
         } catch (_) {}
@@ -365,7 +374,7 @@ async function collectClubGames(teamId: string, slug: string): Promise<{ tagged:
 
   const tagged = events
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-    .slice(0, 10)
+    .slice(0, TOTAL_GAMES_WINDOW)
     .map(e => ({ event: e, sourceSlug: "all" }));
 
   return { tagged, team: teamMeta };
@@ -385,7 +394,7 @@ router.get("/espn/team-games", async (req, res) => {
       const { tagged, team } = await collectNationalGames(teamId);
       toProcess = tagged
         .sort((a, b) => new Date(b.event.date).getTime() - new Date(a.event.date).getTime())
-        .slice(0, 10);
+        .slice(0, TOTAL_GAMES_WINDOW);
       teamInfo = team ?? {};
     } else {
       const { tagged, team } = await collectClubGames(teamId, slug);
@@ -404,7 +413,7 @@ router.get("/espn/team-games", async (req, res) => {
     };
 
     const games = await Promise.all(
-      toProcess.map(async ({ event, sourceSlug }) => {
+      toProcess.map(async ({ event, sourceSlug }, idx) => {
         const comp = event.competitions[0];
         const homeComp = comp.competitors.find(c => c.homeAway === "home");
         const awayComp = comp.competitors.find(c => c.homeAway === "away");
@@ -428,49 +437,59 @@ router.get("/espn/team-games", async (req, res) => {
         let g015 = 0, g1630 = 0, g3145 = 0, g4660 = 0, g6175 = 0, g7690 = 0;
         let gc015 = 0, gc1630 = 0, gc3145 = 0, gc4660 = 0, gc6175 = 0, gc7690 = 0;
 
-        try {
-          const summary = await espnFetch<EspnSummaryResponse>(
-            `${ESPN_BASE}/${sourceSlug}/summary?event=${event.id}`
-          );
+        // Janela dupla: só os SHORT_TERM_WINDOW jogos mais recentes buscam o
+        // detalhe completo (/summary — chutes, escanteios, cartões, faixas de
+        // gol). Do SHORT_TERM_WINDOW+1 em diante ("base estrutural"), fica só
+        // com o que a listagem de calendário já trouxe de graça (resultado,
+        // placar, adversário, mando, data) — sem chamada extra por jogo.
+        if (idx < SHORT_TERM_WINDOW) {
+          try {
+            const summary = await espnFetch<EspnSummaryResponse>(
+              `${ESPN_BASE}/${sourceSlug}/summary?event=${event.id}`
+            );
 
-          (summary.keyEvents ?? []).forEach(e => {
-            const isGoal = e.scoringPlay || e.type?.type === "goal" || e.type?.type === "own-goal";
-            if (!isGoal) return;
-            const forUs = e.team?.id === teamId;
-            const half = e.period?.number ?? 1;
-            const sec = e.clock?.value ?? 0;
-            const min = Math.floor(sec / 60);
-            if (half === 1) { if (forUs) gf1H++; else ga1H++; }
-            if (forUs) {
-              if (min <= 15) g015++;
-              else if (min <= 30) g1630++;
-              else if (min <= 45) g3145++;
-              else if (min <= 60) g4660++;
-              else if (min <= 75) g6175++;
-              else g7690++;
-            } else {
-              if (min <= 15) gc015++;
-              else if (min <= 30) gc1630++;
-              else if (min <= 45) gc3145++;
-              else if (min <= 60) gc4660++;
-              else if (min <= 75) gc6175++;
-              else gc7690++;
-            }
-          });
+            (summary.keyEvents ?? []).forEach(e => {
+              const isGoal = e.scoringPlay || e.type?.type === "goal" || e.type?.type === "own-goal";
+              if (!isGoal) return;
+              const forUs = e.team?.id === teamId;
+              const half = e.period?.number ?? 1;
+              const sec = e.clock?.value ?? 0;
+              const min = Math.floor(sec / 60);
+              if (half === 1) { if (forUs) gf1H++; else ga1H++; }
+              if (forUs) {
+                if (min <= 15) g015++;
+                else if (min <= 30) g1630++;
+                else if (min <= 45) g3145++;
+                else if (min <= 60) g4660++;
+                else if (min <= 75) g6175++;
+                else g7690++;
+              } else {
+                if (min <= 15) gc015++;
+                else if (min <= 30) gc1630++;
+                else if (min <= 45) gc3145++;
+                else if (min <= 60) gc4660++;
+                else if (min <= 75) gc6175++;
+                else gc7690++;
+              }
+            });
 
-          const boxTeams = summary.boxscore?.teams ?? [];
-          const myBox = boxTeams.find(t => t.team?.id === teamId);
-          const oppBox = boxTeams.find(t => t.team?.id !== teamId);
+            const boxTeams = summary.boxscore?.teams ?? [];
+            const myBox = boxTeams.find(t => t.team?.id === teamId);
+            const oppBox = boxTeams.find(t => t.team?.id !== teamId);
 
-          shots = getStat(myBox, "totalShots");
-          shotsOnTarget = getStat(myBox, "shotsOnTarget");
-          cornersFor = getStat(myBox, "wonCorners");
-          cornersAgainst = getStat(oppBox, "wonCorners");
-          yellows = getStat(myBox, "yellowCards");
-          reds = getStat(myBox, "redCards");
-          fouls = getStat(myBox, "foulsCommitted");
-        } catch (_) {}
+            shots = getStat(myBox, "totalShots");
+            shotsOnTarget = getStat(myBox, "shotsOnTarget");
+            cornersFor = getStat(myBox, "wonCorners");
+            cornersAgainst = getStat(oppBox, "wonCorners");
+            yellows = getStat(myBox, "yellowCards");
+            reds = getStat(myBox, "redCards");
+            fouls = getStat(myBox, "foulsCommitted");
+          } catch (_) {}
+        }
 
+        // Nos jogos da base estrutural (sem /summary), gf1H/ga1H ficam 0 —
+        // o placar total continua exato, só o split por tempo fica todo em
+        // gf2H/ga2H por não termos como saber a divisão real.
         const gf2H = Math.max(0, myScore - gf1H);
         const ga2H = Math.max(0, oppScore - ga1H);
 
@@ -545,12 +564,18 @@ router.get("/espn/referees", async (req, res) => {
           const { tagged } = await collectNationalGames(tid);
           tagged
             .sort((a, b) => new Date(b.event.date).getTime() - new Date(a.event.date).getTime())
-            .slice(0, 10)
+            .slice(0, SHORT_TERM_WINDOW)
             .forEach((t) => eventSlug.set(t.event.id, t.sourceSlug));
         } else {
-          // Cascade fetch for clubs (same as team-games)
+          // Cascade fetch for clubs (same as team-games). collectClubGames
+          // agora devolve até TOTAL_GAMES_WINDOW jogos (janela dupla do
+          // team-games) — aqui só precisamos de uma amostra pra achar
+          // árbitros recentes, então limitamos a SHORT_TERM_WINDOW pra não
+          // triplicar as chamadas de /summary à toa.
           const { tagged } = await collectClubGames(tid, slug);
-          tagged.forEach((t) => eventSlug.set(t.event.id, t.sourceSlug));
+          tagged
+            .slice(0, SHORT_TERM_WINDOW)
+            .forEach((t) => eventSlug.set(t.event.id, t.sourceSlug));
         }
       })
     );
