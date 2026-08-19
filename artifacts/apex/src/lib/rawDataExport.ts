@@ -64,16 +64,41 @@ export function formatTeamRawData(teamName: string, mando: "casa" | "fora", game
   return `${header}\n\n${sections.join("\n")}`;
 }
 
+// Odds buscadas automaticamente na Betano (ver oddsApi.ts/handleFetchBetanoOdds
+// em ApexPage.tsx) — bloco separado, só aparece quando a busca automática
+// trouxe alguma coisa (odds digitadas manualmente não entram aqui, ficam só
+// no cálculo do modelo local).
+export interface BetanoOddsBlockInput {
+  homeWin?: string; draw?: string; awayWin?: string;
+  over25?: string; under25?: string; btts?: string; bttsNo?: string;
+}
+
+function formatOddsBlock(odds: BetanoOddsBlockInput): string | null {
+  const lines: string[] = [];
+  if (odds.homeWin) lines.push(`Casa: ${odds.homeWin}`);
+  if (odds.draw) lines.push(`Empate: ${odds.draw}`);
+  if (odds.awayWin) lines.push(`Fora: ${odds.awayWin}`);
+  if (odds.over25) lines.push(`Over 2.5: ${odds.over25}`);
+  if (odds.under25) lines.push(`Under 2.5: ${odds.under25}`);
+  if (odds.btts) lines.push(`Ambas Marcam (Sim): ${odds.btts}`);
+  if (odds.bttsNo) lines.push(`Ambas Marcam (Não): ${odds.bttsNo}`);
+  if (!lines.length) return null;
+  return `MERCADOS E ODDS DISPONÍVEIS (Betano):\n  ${lines.join(" | ")}`;
+}
+
 export function formatMatchupRawData(
   homeName: string, awayName: string,
   homeGames: Game[], awayGames: Game[],
   matchContext?: string,
+  betanoOdds?: BetanoOddsBlockInput,
 ): string {
+  const oddsBlock = betanoOdds ? formatOddsBlock(betanoOdds) : null;
   return [
     `═══════════════════════════════════════════`,
     `CONFRONTO: ${homeName} (casa) vs ${awayName} (fora)`,
     `═══════════════════════════════════════════`,
     ...(matchContext?.trim() ? ["", `CONTEXTO: ${matchContext.trim()}`] : []),
+    ...(oddsBlock ? ["", oddsBlock] : []),
     "",
     formatTeamRawData(homeName, "casa", homeGames),
     "",

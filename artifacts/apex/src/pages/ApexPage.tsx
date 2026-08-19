@@ -12,6 +12,7 @@ import { AuditDataScreen } from "../components/AuditDataScreen";
 import { DayGamesScreen } from "../components/DayGamesScreen";
 import { BankrollCard } from "../components/BankrollCard";
 import { fetchStrengths, logClientPrediction } from "../lib/auditApi";
+import { fetchBetanoOdds } from "../lib/oddsApi";
 import type {
   League, Team, H2HData, RefereeData, AnalysisResult, Page, Game, MotivationFactors, SavedAnalysis, MarketScores,
 } from "../types";
@@ -263,6 +264,9 @@ export function ApexPage() {
   const [referees, setReferees] = useState<EspnReferee[]>([]);
   const [odds, setOdds] = useState<OddsForm>(emptyOdds());
   const [matchContext, setMatchContext] = useState("");
+  const [matchDate, setMatchDate] = useState(() => new Date().toISOString().split("T")[0]!);
+  const [fetchingOdds, setFetchingOdds] = useState(false);
+  const [oddsSource, setOddsSource] = useState<"betano" | null>(null);
   const [activeGame, setActiveGame] = useState(0);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [mgaaResult, setMgaaResult] = useState<MGAAResult | null>(null);
@@ -351,6 +355,7 @@ export function ApexPage() {
     setHomeTeam(emptyTeam()); setAwayTeam(emptyTeam());
     setH2h(emptyH2H()); setReferee(emptyRef());
     setOdds(emptyOdds()); setMatchContext(""); setResult(null); setMgaaResult(null);
+    setMatchDate(new Date().toISOString().split("T")[0]!); setOddsSource(null);
     setActiveGame(0); setSearchQ(""); setSearchRes([]);
     setReferees([]); setEditIdx(null);
     setDataExport(null); setCopied(false);
@@ -434,6 +439,35 @@ export function ApexPage() {
     showToast(`✓ Árbitro: ${r.name}`, "success");
   }
 
+  async function handleFetchBetanoOdds() {
+    if (!homeTeam.name || !awayTeam.name) {
+      showToast("Carregue os dois times primeiro", "error"); return;
+    }
+    setFetchingOdds(true);
+    try {
+      const betanoOdds = await fetchBetanoOdds(homeTeam.name, awayTeam.name, matchDate);
+      if (!betanoOdds) {
+        showToast("Betano ainda não tem mercado aberto pra esse jogo — preencha manualmente", "error");
+        setFetchingOdds(false);
+        return;
+      }
+      setOdds({
+        homeWin: betanoOdds.homeWin != null ? String(betanoOdds.homeWin) : "",
+        draw: betanoOdds.draw != null ? String(betanoOdds.draw) : "",
+        awayWin: betanoOdds.awayWin != null ? String(betanoOdds.awayWin) : "",
+        over25: betanoOdds.over25 != null ? String(betanoOdds.over25) : "",
+        under25: betanoOdds.under25 != null ? String(betanoOdds.under25) : "",
+        btts: betanoOdds.bttsYes != null ? String(betanoOdds.bttsYes) : "",
+        bttsNo: betanoOdds.bttsNo != null ? String(betanoOdds.bttsNo) : "",
+      });
+      setOddsSource("betano");
+      showToast("✓ Odds da Betano carregadas", "success");
+    } catch (_) {
+      showToast("Falha ao buscar odds — preencha manualmente", "error");
+    }
+    setFetchingOdds(false);
+  }
+
   function updGame(team: "home" | "away", idx: number, game: Game) {
     (team === "home" ? setHomeTeam : setAwayTeam)(prev => ({
       ...prev, games: prev.games.map((g, i) => (i === idx ? game : g)),
@@ -443,7 +477,8 @@ export function ApexPage() {
   // Sistema não realiza mais análise — só busca e devolve os dados brutos
   // dos últimos jogos dos dois times.
   function exportRawData() {
-    const text = formatMatchupRawData(homeTeam.name, awayTeam.name, homeTeam.games, awayTeam.games, matchContext);
+    const betanoOdds = oddsSource === "betano" ? odds : undefined;
+    const text = formatMatchupRawData(homeTeam.name, awayTeam.name, homeTeam.games, awayTeam.games, matchContext, betanoOdds);
     setDataExport(text);
     setCopied(false);
     setPage("data");
@@ -826,10 +861,22 @@ export function ApexPage() {
       <Card style={{ marginBottom: 12 }}>
         <SLabel icon="💱">Odds do Mercado (opcional)</SLabel>
         <div style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>
-          Cole as odds decimais da casa (ex.: 1.85). Quando preenchidas, o modelo é
-          calibrado pela probabilidade implícita (sem a margem da casa) — o sinal público
+          Cole as odds decimais da casa (ex.: 1.85), ou busque automático na
+          Betano abaixo. Quando preenchidas, o modelo é calibrado pela
+          probabilidade implícita (sem a margem da casa) — o sinal público
           mais confiável. Deixe em branco para usar só o modelo.
         </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 12 }}>
+          <div style={{ flex: 1 }}>
+            <Field label="Data do jogo" type="date" value={matchDate} onChange={setMatchDate} />
+          </div>
+          <Btn onClick={handleFetchBetanoOdds} disabled={fetchingOdds || !homeTeam.name || !awayTeam.name}>
+            {fetchingOdds ? "..." : "🎰 Buscar Odds (Betano)"}
+          </Btn>
+        </div>
+        {oddsSource === "betano" && (
+          <div style={{ fontSize: 10, color: C.green, marginBottom: 12 }}>✓ Preenchido automaticamente com odds da Betano</div>
+        )}
         <div style={{ fontSize: 10, color: C.muted, letterSpacing: 1.5, fontWeight: 700, textTransform: "uppercase", marginBottom: 8 }}>Resultado (1X2)</div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 12 }}>
           <Field label="Casa" value={odds.homeWin} onChange={v => setOdds(p => ({ ...p, homeWin: v }))} placeholder="2.10" />
