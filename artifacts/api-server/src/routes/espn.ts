@@ -133,14 +133,20 @@ async function espnFetchOnce<T>(url: string, timeoutMs: number): Promise<T> {
   }
 }
 
-async function espnFetch<T>(url: string, timeoutMs = 8000): Promise<T> {
-  try {
-    return await espnFetchOnce<T>(url, timeoutMs);
-  } catch (err) {
-    // 1 retry — cobre timeouts pontuais e rate-limit temporário da ESPN.
-    await new Promise((r) => setTimeout(r, 400));
-    return espnFetchOnce<T>(url, timeoutMs);
+// retries = número de tentativas ALÉM da primeira. Backoff cresce a cada
+// uma (400ms, 900ms, ...). Chamadas mais valiosas (ex.: /summary dos jogos
+// de curto prazo) pedem mais tentativas — o resto usa o padrão de 1.
+async function espnFetch<T>(url: string, timeoutMs = 8000, retries = 1): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 400 + (attempt - 1) * 500));
+    try {
+      return await espnFetchOnce<T>(url, timeoutMs);
+    } catch (err) {
+      lastErr = err;
+    }
   }
+  throw lastErr;
 }
 
 interface ScoredTeam { id: string; name: string; logo: string; slug: string; score: number }
@@ -444,8 +450,13 @@ router.get("/espn/team-games", async (req, res) => {
         // placar, adversário, mando, data) — sem chamada extra por jogo.
         if (idx < SHORT_TERM_WINDOW) {
           try {
+            // 3 tentativas em vez do padrão (1) — essa é a chamada mais rica
+            // em dado de toda a busca de time, vale insistir mais antes de
+            // aceitar o jogo com estatística zerada.
             const summary = await espnFetch<EspnSummaryResponse>(
-              `${ESPN_BASE}/${sourceSlug}/summary?event=${event.id}`
+              `${ESPN_BASE}/${sourceSlug}/summary?event=${event.id}`,
+              8000,
+              3,
             );
 
             (summary.keyEvents ?? []).forEach(e => {
@@ -477,14 +488,38 @@ router.get("/espn/team-games", async (req, res) => {
             const myBox = boxTeams.find(t => t.team?.id === teamId);
             const oppBox = boxTeams.find(t => t.team?.id !== teamId);
 
-            shots = getStat(myBox, "totalShots");
-            shotsOnTarget = getStat(myBox, "shotsOnTarget");
-            cornersFor = getStat(myBox, "wonCorners");
-            cornersAgainst = getStat(oppBox, "wonCorners");
-            yellows = getStat(myBox, "yellowCards");
-            reds = getStat(myBox, "redCards");
-            fouls = getStat(myBox, "foulsCommitted");
-          } catch (_) {}
+            if (!myBox?.statistics?.length) {
+              // Depois de 3 tentativas, a ESPN respondeu mas sem box score
+              // pra esse time nesse jogo — não é bug nosso, é dado que a
+              // ESPN não tem pra esse evento específico. Só registra pra
+              // não confundir com falha de rede se alguém for investigar.
+              logger.warn({ eventId: event.id, sourceSlug }, "ESPN summary sem box score pro time — jogo fica sem estatística detalhada");
+            } else {
+              shots = getStat(myBox, "totalShots");
+              shotsOnTarget = getStat(myBox, "shotsOnTarget");
+              cornersFor = getStat(myBox, "wonCorners");
+              cornersAgainst = getStat(oppBox, "wonCorners");
+              yellows = getStat(myBox, "yellowCards");
+              reds = getStat(myBox, "redCards");
+              fouls = getStat(myBox, "foulsCommitted");
+
+              const missing = [
+                ["totalShots", shots], ["shotsOnTarget", shotsOnTarget],
+                ["wonCorners (a favor)", cornersFor], ["yellowCards", yellows], ["foulsCommitted", fouls],
+              ].filter(([, v]) => v === 0).map(([n]) => n);
+              if (missing.length >= 3) {
+                // Várias estatísticas zeradas ao mesmo tempo é mais provável
+                // ser nome de campo diferente nessa competição do que time
+                // que realmente teve 0 em tudo — ajuda a achar o nome real.
+                logger.warn(
+                  { eventId: event.id, sourceSlug, missing, statNamesPresentes: myBox.statistics?.map(s => s.name) },
+                  "ESPN summary: várias estatísticas zeradas — conferir se o nome do campo bate",
+                );
+              }
+            }
+          } catch (err) {
+            logger.warn({ eventId: event.id, sourceSlug, err }, "ESPN summary falhou mesmo após as tentativas extras — jogo fica sem estatística detalhada");
+          }
         }
 
         // Nos jogos da base estrutural (sem /summary), gf1H/ga1H ficam 0 —
