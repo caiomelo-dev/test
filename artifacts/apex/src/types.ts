@@ -227,4 +227,4 @@ export interface DayGame {
   leagueCountry: string;
 }
 
-export type Page = "league" | "home" | "away" | "extra" | "result" | "data";
+export type Page = "league" | "dayPick" | "home" | "away" | "extra" | "result" | "data";

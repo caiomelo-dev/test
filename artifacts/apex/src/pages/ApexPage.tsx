@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { C, LEAGUES, MOTIVATION_FACTORS, ESPN_LEAGUE_MAP, currentSeasonYear, groupLeaguesByRegion } from "../lib/constants";
 import { consolidate, scoreMarkets, marketStatus, dataConfidence, buildRecommendations, goalProbabilities, exactScoreProbabilities, runMGAAPlus, type ScoreOpts, type MatchOddsInput, type MGAAResult } from "../lib/math";
-import { espnSearchTeams, espnLoadTeamGames, espnLoadH2H, espnLoadReferees, getEspnSlug, type EspnReferee } from "../lib/espnApi";
+import { espnSearchTeams, espnLoadTeamGames, espnLoadH2H, espnLoadReferees, espnLoadScoreboard, getEspnSlug, type EspnReferee } from "../lib/espnApi";
 import { formatMatchupRawData } from "../lib/rawDataExport";
 import { saveAuditData } from "../lib/auditDataApi";
 import type { EspnTeam } from "../lib/espnApi";
@@ -14,7 +14,7 @@ import { BankrollCard } from "../components/BankrollCard";
 import { fetchStrengths, logClientPrediction } from "../lib/auditApi";
 import { fetchBetanoOdds } from "../lib/oddsApi";
 import type {
-  League, Team, H2HData, RefereeData, AnalysisResult, Page, Game, MotivationFactors, SavedAnalysis, MarketScores,
+  League, Team, H2HData, RefereeData, AnalysisResult, Page, Game, MotivationFactors, SavedAnalysis, MarketScores, DayGame,
 } from "../types";
 
 interface OddsForm {
@@ -275,6 +275,7 @@ export function ApexPage() {
   const [loadMsg, setLoadMsg] = useState("");
   const [searchQ, setSearchQ] = useState("");
   const [searchRes, setSearchRes] = useState<EspnTeam[]>([]);
+  const [dayGames, setDayGames] = useState<DayGame[]>([]);
   const [searching, setSearching] = useState(false);
   const [apiOk, setApiOk] = useState<boolean | null>(null);
   const [history, setHistory] = useState<SavedAnalysis[]>([]);
@@ -303,7 +304,9 @@ export function ApexPage() {
         // Ajuste 7: restaurar mgaaResult da sessão anterior
         if (s.mgaaResult) setMgaaResult(s.mgaaResult);
         if (s.page && s.page !== "league") {
-          setPage(s.page === "result" && !s.result ? "home" : s.page);
+          // dayGames não é persistido (como odds/matchContext) — restaurar
+          // direto em "dayPick" mostraria a lista vazia por engano.
+          setPage(s.page === "result" && !s.result ? "home" : s.page === "dayPick" ? "league" : s.page);
         }
         if (s.activeGame != null) setActiveGame(s.activeGame);
         showToast("✓ Sessão restaurada");
@@ -356,7 +359,7 @@ export function ApexPage() {
     setH2h(emptyH2H()); setReferee(emptyRef());
     setOdds(emptyOdds()); setMatchContext(""); setResult(null); setMgaaResult(null);
     setMatchDate(new Date().toISOString().split("T")[0]!); setOddsSource(null);
-    setActiveGame(0); setSearchQ(""); setSearchRes([]);
+    setActiveGame(0); setSearchQ(""); setSearchRes([]); setDayGames([]);
     setReferees([]); setEditIdx(null);
     setDataExport(null); setCopied(false);
   }
@@ -388,6 +391,63 @@ export function ApexPage() {
     } catch (_) { showToast(`Falha ao carregar ${team.name}`, "error"); }
     setLoading(false); setLoadMsg("");
     setSearchQ("");
+  }
+
+  // Ligas de clube (não Seleções/Amistoso): em vez de digitar o nome dos
+  // times, lista os jogos de hoje da liga escolhida pra tocar num confronto
+  // e carregar os dois times de uma vez.
+  async function loadDayGames() {
+    if (!league) return;
+    const slug = ESPN_LEAGUE_MAP[league.id] ?? "bra.1";
+    setLoading(true); setLoadMsg("Buscando jogos de hoje...");
+    try {
+      const todayISO = new Date().toISOString().split("T")[0]!.replace(/-/g, "");
+      const games = await espnLoadScoreboard(slug, todayISO);
+      setDayGames(games);
+      setPage("dayPick");
+    } catch (_) {
+      showToast("Falha ao buscar jogos do dia — busca manual disponível", "error");
+      setPage("home");
+    }
+    setLoading(false); setLoadMsg("");
+  }
+
+  async function pickDayGame(game: DayGame) {
+    setLoading(true); setLoadMsg(`Carregando ${game.homeTeamName} vs ${game.awayTeamName}...`);
+    try {
+      const [homeData, awayData] = await Promise.allSettled([
+        espnLoadTeamGames(game.homeTeamId, game.slug),
+        espnLoadTeamGames(game.awayTeamId, game.slug),
+      ]);
+      const hOk = homeData.status === "fulfilled";
+      const aOk = awayData.status === "fulfilled";
+
+      setHomeTeam({
+        ...emptyTeam(),
+        name: (hOk && homeData.value.teamName) || game.homeTeamName,
+        teamId: parseInt(game.homeTeamId),
+        logo: hOk ? homeData.value.logo : "",
+        games: hOk && homeData.value.games.length > 0 ? homeData.value.games : emptyTeam().games,
+      });
+      setAwayTeam({
+        ...emptyTeam(),
+        name: (aOk && awayData.value.teamName) || game.awayTeamName,
+        teamId: parseInt(game.awayTeamId),
+        logo: aOk ? awayData.value.logo : "",
+        games: aOk && awayData.value.games.length > 0 ? awayData.value.games : emptyTeam().games,
+      });
+
+      if (game.date) setMatchDate(game.date.split("T")[0]!);
+
+      const failed = [!hOk && game.homeTeamName, !aOk && game.awayTeamName].filter(Boolean) as string[];
+      if (failed.length) showToast(`Falha ao carregar ${failed.join(" e ")} — pode revisar/buscar manualmente`, "error");
+      else showToast("✓ Times carregados", "success");
+
+      setPage("home"); setActiveGame(0);
+    } catch (_) {
+      showToast("Falha ao carregar o jogo — tente a busca manual", "error");
+    }
+    setLoading(false); setLoadMsg("");
   }
 
   async function loadH2HData() {
@@ -589,7 +649,7 @@ export function ApexPage() {
       .catch(() => showToast("Auditoria: não foi possível registrar esta análise", "error"));
   }
 
-  const ps: Record<Page, number> = { league: 1, home: 2, away: 3, extra: 4, result: 5, data: 4 };
+  const ps: Record<Page, number> = { league: 1, dayPick: 1, home: 2, away: 3, extra: 4, result: 5, data: 4 };
 
   const wrap = (children: React.ReactNode) => (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "'Inter','Segoe UI',sans-serif" }}>
@@ -708,9 +768,37 @@ export function ApexPage() {
               Temporada: <span style={{ color: C.cyan, fontWeight: 700 }}>{currentSeasonYear(ESPN_LEAGUE_MAP[league.id] ?? "bra.1")}</span>
             </div>
           )}
-          <Btn full onClick={() => { setPage("home"); setActiveGame(0); }}>Continuar →</Btn>
+          <Btn full onClick={() => {
+            if (league.isNationalTeam || league.isFreeSearch) { setPage("home"); setActiveGame(0); }
+            else { loadDayGames(); }
+          }}>Continuar →</Btn>
         </div>
       )}
+    </Card>
+  );
+
+  // ── JOGOS DE HOJE (escolher o confronto em vez de buscar por nome) ──
+  if (page === "dayPick") return wrap(
+    <Card>
+      <SLabel icon="📅">Jogos de Hoje{league ? ` — ${league.name}` : ""}</SLabel>
+      {dayGames.length === 0 && (
+        <div style={{ textAlign: "center", color: C.muted, padding: 24, fontSize: 13 }}>
+          Nenhum jogo hoje nessa liga.
+        </div>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 16 }}>
+        {dayGames.map(g => (
+          <button key={g.id} onClick={() => pickDayGame(g)}
+            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "rgba(255,255,255,.03)", border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 14px", cursor: "pointer", color: C.text, textAlign: "left" }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{g.homeTeamName} <span style={{ color: C.muted, fontSize: 11 }}>vs</span> {g.awayTeamName}</span>
+            <span style={{ color: C.cyan, fontSize: 11 }}>Carregar →</span>
+          </button>
+        ))}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+        <Btn variant="ghost" onClick={() => setPage("league")}>← Voltar</Btn>
+        <Btn variant="outline" onClick={() => { setPage("home"); setActiveGame(0); }}>Buscar manualmente</Btn>
+      </div>
     </Card>
   );
 
@@ -779,7 +867,7 @@ export function ApexPage() {
             onChange={(i, g) => updGame(page, i, g)}
           />
           <div style={{ display: "flex", justifyContent: "space-between", marginTop: 16, gap: 8 }}>
-            <Btn variant="ghost" onClick={() => { setEditIdx(null); setPage(isHome ? "league" : "home"); }}>← Voltar</Btn>
+            <Btn variant="ghost" onClick={() => { setEditIdx(null); setPage(isHome ? (dayGames.length ? "dayPick" : "league") : "home"); }}>← Voltar</Btn>
             <Btn disabled={!filledGames} onClick={() => { setEditIdx(null); setPage(isHome ? "away" : "extra"); }}>
               {isHome ? "Time Fora →" : "H2H →"}
             </Btn>
