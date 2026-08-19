@@ -1,0 +1,27 @@
+kind = "web"
+previewPath = "/"
+title = "APEX — Análise Preditiva"
+version = "1.0.0"
+id = "artifacts/apex"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23095
+
+[services.development]
+run = "pnpm --filter @workspace/apex run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/apex", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/apex/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23095"
+BASE_PATH = "/"
